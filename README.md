@@ -71,7 +71,7 @@ No need to pre-create an initiator group — the plugin creates one automaticall
 
 ### Via the Web UI (recommended)
 
-Go to **Datacenter → Storage → Add → HPE Nimble** and fill in the dialog. Alletra 5000/6000 use that same menu entry (storage type `nimble`). The plugin ships a JavaScript panel (`NimbleEdit.js`) that registers "HPE Nimble" in the standard Add dropdown and enables the Edit button for existing entries.
+Go to **Datacenter → Storage → Add → HPE Nimble** and fill in the dialog. Alletra 5000/6000 use that same menu entry (storage type `nimble`). On Proxmox VE 9.3 and newer the dialog is generated natively from the plugin's metadata: the type is listed as "HPE Nimble / Alletra 5000/6000" under **Add → Custom Plugins**, with tuning options (QoS limits, discovery, debug) under *Advanced*. On older releases the plugin's JavaScript panel (`NimbleEdit.js`) registers "HPE Nimble" in the Add dropdown and enables the Edit button instead; on 9.3+ it detects the native dialog and steps aside.
 
 See **[docs/GUI_ADD_EDIT_STORAGE.md](docs/GUI_ADD_EDIT_STORAGE.md)** for a full walkthrough with field descriptions.
 

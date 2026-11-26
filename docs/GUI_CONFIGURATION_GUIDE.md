@@ -4,7 +4,9 @@ This document explains how the Nimble storage plugin integrates with the Proxmox
 
 ## How Proxmox UI Configuration Works
 
-Proxmox VE does **not** auto-generate storage dialogs from the plugin schema. The backend (`properties()` / `options()` in `NimbleStoragePlugin.pm`) defines what the **API** accepts and validates; the form fields shown in the browser come from a hand-written ExtJS panel — that is why this plugin ships `www/NimbleEdit.js`. A new config key therefore needs **both** a backend declaration and a matching field in `NimbleEdit.js` to be editable from the GUI (keys without a GUI field remain settable via `pvesm set`).
+**Proxmox VE 9.3+ (storage API 17):** the dialog is generated natively from `properties()` / `options()` plus the `title` of each property and the `advanced-properties`, `hidden-properties` and `meta.display-name` keys of `plugindata()`. A new config key only needs a backend declaration (and a `title`, plus an entry in `advanced-properties` if it is a tuning knob). `NimbleEdit.js` does not register itself on these releases.
+
+**Older releases:** Proxmox VE does **not** auto-generate storage dialogs from the plugin schema. The backend (`properties()` / `options()` in `NimbleStoragePlugin.pm`) defines what the **API** accepts and validates; the form fields shown in the browser come from a hand-written ExtJS panel — that is why this plugin ships `www/NimbleEdit.js`. A new config key therefore needs **both** a backend declaration and a matching field in `NimbleEdit.js` to be editable from the GUI (keys without a GUI field remain settable via `pvesm set`).
 
 ### 1. The `properties()` Method
 The `properties()` method is the schema source of truth. Any key declared here (and referenced in `options()`) is accepted and validated by the PVE storage API (`pvesm` / `POST /api2/…/storage`).

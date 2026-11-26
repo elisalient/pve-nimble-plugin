@@ -106,6 +106,21 @@ is( $pv[1], 'base-101-disk-0', 'parse_volname: name kept' );
 my $pd = $class->plugindata();
 ok( $pd->{content}[0]{$_}, "plugindata: $_ content type on APIVER 17" ) for qw(vm-vol vm-state ct-vol);
 is_deeply( $pd->{content}[1], { images => 1, rootdir => 1 }, 'plugindata: default content unchanged' );
+is( $pd->{meta}{'display-name'}, 'HPE Nimble / Alletra 5000/6000', 'plugindata: display name' );
+ok( $pd->{'hidden-properties'}{nimble_storeid}, 'plugindata: nimble_storeid hidden' );
+ok( $pd->{'hidden-properties'}{address}, 'plugindata: legacy alias hidden' );
+ok( $pd->{'hidden-properties'}{format}, 'plugindata: format hidden (raw only; dialog would offer qcow2/vmdk)' );
+ok( $pd->{'advanced-properties'}{nimble_limit_iops}, 'plugindata: QoS limit is advanced' );
+ok( !$pd->{'advanced-properties'}{nimble_address}, 'plugindata: address is not advanced' );
+ok( $pd->{'sensitive-properties'}{password}, 'plugindata: password still sensitive' );
+my $props = $class->properties();
+is( $props->{nimble_address}{title}, 'Array Address', 'properties: title set for web UI' );
+my @untitled = grep { /^nimble_/ && !$props->{$_}{title} } keys %$props;
+is_deeply( \@untitled, [], 'properties: every nimble_ property has a title' );
+my $opts = $class->options();
+my @bad_adv = grep { !$opts->{$_} } keys %{ $pd->{'advanced-properties'} };
+is_deeply( \@bad_adv, [], 'plugindata: advanced properties are all options' );
+
 # --- targeted iSCSI rescans (no host-wide `iscsiadm -m session --rescan`) -------------------------
 {
   my $P = 'PVE::Storage::Custom::NimbleStoragePlugin';

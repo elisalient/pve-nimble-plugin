@@ -135,6 +135,22 @@ sub plugindata {
   }
   return {
     content => [ $supported, { images => 1, rootdir => 1 } ],
+    # Web UI metadata (pve-storage APIVER 17, ignored by older hosts): PVE 9.3 generates the Add/Edit
+    # dialog from it (GET /plugins/storage/plugin); NimbleEdit.js steps aside there.
+    meta => { 'display-name' => 'HPE Nimble / Alletra 5000/6000' },
+    'advanced-properties' => {
+      map { $_ => 1 }
+        qw(nimble_token_ttl nimble_debug nimble_auto_iscsi_discovery nimble_iscsi_discovery_ips
+        nimble_iscsi_discovery_override nimble_legacy_name_fallback nimble_limit_iops
+        nimble_limit_mbps)
+    },
+    # nimble_storeid is maintained by check_config; legacy pre-v0.0.25 aliases are migrated on write.
+    # `format` stays in options() so existing "format raw" lines keep parsing, but the generated
+    # dialog would offer qcow2/subvol/vmdk, which PVE then refuses ("storage does not support
+    # format"): raw is the only format, like the in-tree RBD/iSCSI plugins that do not offer it.
+    'hidden-properties' => {
+      map { $_ => 1 } ( 'nimble_storeid', 'format', values %NIMBLE_LEGACY_CONFIG_KEYS )
+    },
     format  => [ { raw    => 1 },            "raw" ],
     # `password` is sensitive (APIVER 11 mechanism): PVE keeps it out of storage.cfg and passes it
     # to on_add/on_update hooks separately; our hooks persist it to /etc/pve/priv/storage/<id>.pw.
@@ -241,6 +257,28 @@ sub properties {
       optional    => 1,
     },
   };
+  # Field labels for the generated web UI dialog (APIVER 17). `title` has long been a valid
+  # JSONSchema key in pve-common, so older hosts accept and ignore it.
+  my %titles = (
+    nimble_address                  => 'Array Address',
+    nimble_initiator_group          => 'Initiator Group',
+    nimble_vnprefix                 => 'Volume Name Prefix',
+    nimble_pool_name                => 'Pool',
+    nimble_volume_collection        => 'Volume Collection',
+    nimble_check_ssl                => 'Verify TLS Certificate',
+    nimble_token_ttl                => 'Session Token TTL (s)',
+    nimble_debug                    => 'Debug Level',
+    nimble_auto_iscsi_discovery     => 'Automatic iSCSI Discovery',
+    nimble_iscsi_discovery_ips      => 'Extra Discovery Portals',
+    nimble_iscsi_discovery_override => 'Use Only Listed Portals',
+    nimble_legacy_name_fallback     => 'Match Unprefixed Volumes',
+    nimble_folder                   => 'Folder',
+    nimble_limit_iops               => 'IOPS Limit',
+    nimble_limit_mbps               => 'Throughput Limit (MB/s)',
+    nimble_storeid                  => 'Storage ID',
+  );
+  $canonical->{ $_ }{ title } = $titles{ $_ } for grep { $canonical->{ $_ } } keys %titles;
+
   my $props = { %$canonical };
   for my $new ( keys %NIMBLE_LEGACY_CONFIG_KEYS ) {
     my $old    = $NIMBLE_LEGACY_CONFIG_KEYS{ $new };
