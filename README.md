@@ -222,6 +222,8 @@ devices {
 
 After editing, run `multipathd reconfigure`.
 
+**Proxmox VE 9.3+:** do not add Nimble volumes under **Datacenter → SAN → Add Multipath Entry**. The plugin manages per-volume aliases itself. For a WWID that has an entry there, the plugin leaves the alias to PVE, and PVE never removes a WWID from its allow-list when the volume is deleted.
+
 > **Alias management:** The plugin automatically writes per-volume WWID→alias entries to `/etc/multipath/conf.d/nimble-<storeid>.conf` when volumes are mapped, and restores them on `activate_storage`. You do not need to manage this file manually — but do not hand-edit it, as the plugin owns it.
 
 ## Lab validation (informal)

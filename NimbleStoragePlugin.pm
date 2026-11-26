@@ -1078,6 +1078,33 @@ sub nimble_multipath_wwid_in_main_conf {
   return index( lc($content), lc($wwid) ) >= 0 ? 1 : 0;
 }
 
+# PVE 9.3+ cluster-wide multipath management (/etc/pve/multipath.cfg, applied by pvestatd into
+# /etc/multipath/conf.d/pve-aliases.conf). There is no plugin API for it, and every change there
+# makes every node rewrite its drop-in and reconfigure multipathd, so the plugin keeps managing its
+# own per-volume aliases. But if an admin puts a Nimble LUN's WWID into multipath.cfg, PVE owns it:
+# do not write a competing alias (two multipaths{} entries for one WWID), and note that PVE never
+# removes WWIDs, so a deleted volume's WWID stays in its allow-list.
+# Returns { lc(wwid) => 1 }; empty on hosts without the module (PVE < 9.3) or on any error.
+sub nimble_multipath_pve_managed_wwids {
+  my $ids = eval {
+    require PVE::Multipath::Config;
+    PVE::Multipath::Config::read_config()->{ ids };
+  };
+  return {} unless ref($ids) eq 'HASH';
+  return { map { lc($_) => 1 } keys %$ids };
+}
+
+# The WWID cache may hold the bare 32-hex NAA while multipath.cfg uses multipath's own form
+# (2<naa>), so compare every form.
+sub nimble_multipath_wwid_pve_managed {
+  my ( $wwid, $managed ) = @_;
+  $managed //= nimble_multipath_pve_managed_wwids();
+  for my $w ( nimble_multipath_wwid_try_list($wwid) ) {
+    return 1 if $managed->{ lc($w) };
+  }
+  return 0;
+}
+
 # Returns 1 only when the file on disk actually changed (written or removed), so callers can skip
 # `multipathd reconfigure` when the alias set is unchanged.
 sub nimble_multipath_write_conf {
@@ -1120,10 +1147,12 @@ sub nimble_multipath_write_conf {
 sub nimble_multipath_build_aliases {
   my ( $storeid, $cache ) = @_;
   my %aliases;
+  my $pve_managed = nimble_multipath_pve_managed_wwids();
   for my $vn ( keys %$cache ) {
     my $w = $cache->{$vn};
     next unless length($w);
     next if nimble_multipath_wwid_in_main_conf($w);
+    next if nimble_multipath_wwid_pve_managed( $w, $pve_managed );
     $aliases{$w} = nimble_multipath_alias_name( $storeid, $vn );
   }
   return %aliases;
@@ -1261,6 +1290,11 @@ sub nimble_multipath_register {
       . " /etc/multipath.conf to enable plugin-managed aliases.\n";
     return;
   }
+  if ( nimble_multipath_wwid_pve_managed($sane_wwid) ) {
+    # Still cached (so deregister/rename see it); build_aliases leaves its alias to PVE.
+    print "Info :: [nimble-multipath] WWID $sane_wwid ($volname) is managed by Proxmox VE"
+      . " (Datacenter > SAN, /etc/pve/multipath.cfg) — leaving its alias to PVE.\n";
+  }
   nimble_multipath_with_storage_lock( $storeid, sub {
     my $cache = nimble_multipath_load_wwid_cache($storeid);
     return if ( $cache->{$volname} // '' ) eq $sane_wwid;
@@ -1277,6 +1311,11 @@ sub nimble_multipath_deregister {
   nimble_multipath_with_storage_lock( $storeid, sub {
     my $cache = nimble_multipath_load_wwid_cache($storeid);
     return unless exists $cache->{$volname};
+    my $old_wwid = $cache->{$volname} // '';
+    if ( length($old_wwid) && nimble_multipath_wwid_pve_managed($old_wwid) ) {
+      warn "Warning :: [nimble-multipath] WWID $old_wwid ($volname) still has an entry in"
+        . " /etc/pve/multipath.cfg; PVE keeps it allow-listed. Remove it under Datacenter > SAN.\n";
+    }
     delete $cache->{$volname};
     nimble_multipath_save_wwid_cache( $storeid, $cache );
     my %aliases = nimble_multipath_build_aliases( $storeid, $cache );

@@ -177,6 +177,54 @@ is_deeply( \@bad_adv, [], 'plugindata: advanced properties are all options' );
     'targeted rescan: only -r <sid> --rescan, never a bare host-wide session rescan' );
 }
 
+# --- PVE 9.3 managed multipath guard -----------------------------------------------------------
+{
+  my $P = 'PVE::Storage::Custom::NimbleStoragePlugin';
+  no warnings 'redefine';
+  no strict 'refs';
+  local *{"${P}::nimble_multipath_wwid_in_main_conf"} = sub { 0 };
+  my $cache = { 'vm-100-disk-0' => '3600aaaa', 'vm-100-disk-1' => '3600BBBB' };
+
+  # PVE < 9.3: no PVE::Multipath::Config -> plugin aliases everything.
+  is_deeply( $P->can('nimble_multipath_pve_managed_wwids')->(), {}, 'managed multipath: empty without PVE module' );
+  my %a = $P->can('nimble_multipath_build_aliases')->( 'nimble1', $cache );
+  is( scalar( keys %a ), 2, 'managed multipath: both aliased without PVE module' );
+
+  # PVE 9.3: a WWID present in /etc/pve/multipath.cfg is left to PVE (case-insensitive).
+  local $INC{'PVE/Multipath/Config.pm'} = 1;
+  local *PVE::Multipath::Config::read_config = sub { return { ids => { '3600bbbb' => { type => 'wwid' } } } };
+  %a = $P->can('nimble_multipath_build_aliases')->( 'nimble1', $cache );
+  is_deeply( \%a, { '3600aaaa' => 'nimble1-vm-100-disk-0' }, 'managed multipath: PVE-managed WWID gets no plugin alias' );
+
+  # Registering a PVE-managed WWID leaves the alias set alone: write_conf reports no change and
+  # multipathd is not reconfigured.
+  {
+    require File::Temp;
+    my $dir   = File::Temp::tempdir( CLEANUP => 1 );
+    my %store = %$cache;
+    my $reconf = 0;
+    local *{"${P}::nimble_multipath_conf_path"}       = sub { "$dir/nimble-nimble1.conf" };
+    local *{"${P}::nimble_multipath_load_wwid_cache"} = sub { +{%store} };
+    local *{"${P}::nimble_multipath_save_wwid_cache"} = sub { %store = %{ $_[1] } };
+    local *{"${P}::nimble_multipath_reconfigure"}     = sub { $reconf++ };
+    local *{"${P}::file_get_contents"} = sub { open( my $fh, '<', $_[0] ) or die "no $_[0]\n"; local $/; <$fh> };
+    my %al = $P->can('nimble_multipath_build_aliases')->( 'nimble1', \%store );
+    $P->can('nimble_multipath_write_conf')->( 'nimble1', \%al );
+    $P->can('nimble_multipath_register')->( 'nimble1', 'vm-100-disk-2', '3600BBBB' );
+    is( $store{'vm-100-disk-2'}, '3600BBBB', 'managed multipath: PVE-managed WWID is still cached' );
+    is( $reconf, 0, 'managed multipath: no multipathd reconfigure when only a PVE-managed WWID was added' );
+  }
+
+  # multipath.cfg uses multipath's WWID form (2<naa>); the cache may hold the bare 32-hex NAA.
+  my $naa = 'ab' x 16;
+  local *PVE::Multipath::Config::read_config = sub { return { ids => { "2$naa" => { type => 'wwid' } } } };
+  %a = $P->can('nimble_multipath_build_aliases')->( 'nimble1', { 'vm-101-disk-0' => uc($naa) } );
+  is_deeply( \%a, {}, 'managed multipath: bare NAA in the cache matches 2<naa> in multipath.cfg' );
+
+  local *PVE::Multipath::Config::read_config = sub { die "cfs not available\n" };
+  is_deeply( $P->can('nimble_multipath_pve_managed_wwids')->(), {}, 'managed multipath: read error degrades to empty' );
+}
+
 is(
   PVE::Storage::Custom::NimbleStoragePlugin::nimble_snapshot_virtual_size_bytes( { size => 10 } ),
   10 * 1024 * 1024,
