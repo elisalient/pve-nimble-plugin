@@ -231,6 +231,8 @@ On Proxmox VE 9.3 the blocks above can live in **Datacenter → SAN → Multipat
 - Files in `conf.d` are read after `/etc/multipath.conf`. If a node has tuned `device` values there, put the tuned values into the overrides.
 - To move a node: check that `pve-overrides.conf` exists, remove the blocks from `/etc/multipath.conf`, run `multipathd reconfigure`, then check `multipath -t` and `multipath -ll`.
 
+> **Warning (Proxmox VE 9.3): never use Node → SAN *Wipe* or *Create Volume Group* on a Nimble LUN.** The new SAN view decides whether a LUN is in use only from built-in storage settings (`vgname`, `target`, `base`, NVMe `subsysnqn`) and from processes on the *local* node. It cannot see that a LUN belongs to this plugin. A Nimble volume that is connected to a node but not open there is listed as **unused**, and wiping it destroys the guest disk. Examples are a volume activated for a backup or import, a VM that failed to start, or any volume on every node in a shared `nimble_initiator_group`. A plugin interface to claim LUNs has been proposed on pve-devel but does not exist yet; this plugin will implement it once it does.
+
 **Proxmox VE 9.3+:** do not add Nimble volumes under **Datacenter → SAN → Add Multipath Entry**. The plugin manages per-volume aliases itself. For a WWID that has an entry there, the plugin leaves the alias to PVE, and PVE never removes a WWID from its allow-list when the volume is deleted.
 
 > **Alias management:** The plugin automatically writes per-volume WWID→alias entries to `/etc/multipath/conf.d/nimble-<storeid>.conf` when volumes are mapped, and restores them on `activate_storage`. You do not need to manage this file manually — but do not hand-edit it, as the plugin owns it.
