@@ -77,6 +77,33 @@ is(
   'api() reports tested 17 when host APIVER is newer but within APIAGE window',
 );
 
+# --- targeted iSCSI rescans (no host-wide `iscsiadm -m session --rescan`) -------------------------
+{
+  my $P = 'PVE::Storage::Custom::NimbleStoragePlugin';
+  my $out = join "\n",
+    'tcp: [3] 10.0.0.11:3260,2460 iqn.2007-11.com.nimblestorage:vm-100-disk-0-v1.a.b (non-flash)',
+    'tcp: [4] 10.0.0.12:3260,2460 iqn.2007-11.com.nimblestorage:vm-100-disk-0-v1.a.b (non-flash)',
+    'tcp: [5] 10.0.0.11:3260,2460 iqn.2007-11.com.nimblestorage:vm-100-disk-01-v1.a.b (non-flash)',
+    'tcp: [9] 192.0.2.5:3260,1 iqn.2001-05.com.other:lun7 (non-flash)';
+  my $sids = $P->can('nimble_iscsi_session_ids_for_target');
+  is_deeply( [ $sids->( 'iqn.2007-11.com.nimblestorage:vm-100-disk-0-v1.a.b', $out ) ], [ 3, 4 ],
+    'session ids: both paths of this target, not a prefix-sharing volume or another array' );
+  is_deeply( [ $sids->( 'IQN.2007-11.COM.NIMBLESTORAGE:VM-100-DISK-0-V1.A.B', $out ) ], [ 3, 4 ], 'session ids: IQN case-insensitive' );
+  is_deeply( [ $sids->( 'iqn.none:x', $out ) ], [], 'session ids: none for an unknown target' );
+  is_deeply( [ $sids->( "bad iqn; rm -rf /", $out ) ], [], 'session ids: unsafe IQN rejected' );
+
+  no warnings 'redefine';
+  no strict 'refs';
+  my @cmds;
+  local *{"${P}::nimble_iscsiadm_path"}       = sub { '/bin/true' };
+  local *{"${P}::nimble_iscsi_session_output"} = sub { $out };
+  local *{"${P}::run_command"}                 = sub { push @cmds, join( ' ', @{ $_[0] } ); return 0 };
+  is( $P->can('nimble_iscsi_rescan_target_sessions')->('iqn.2007-11.com.nimblestorage:vm-100-disk-0-v1.a.b'), 2,
+    'targeted rescan: one per session of the target' );
+  is_deeply( \@cmds, [ '/bin/true -m session -r 3 --rescan', '/bin/true -m session -r 4 --rescan' ],
+    'targeted rescan: only -r <sid> --rescan, never a bare host-wide session rescan' );
+}
+
 is(
   PVE::Storage::Custom::NimbleStoragePlugin::nimble_snapshot_virtual_size_bytes( { size => 10 } ),
   10 * 1024 * 1024,

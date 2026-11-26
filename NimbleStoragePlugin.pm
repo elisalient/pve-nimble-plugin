@@ -2224,6 +2224,38 @@ sub nimble_iscsi_compact_lc {
   return $t;
 }
 
+# Session IDs whose target is exactly this IQN: the [N] in `iscsiadm -m session` lines
+# ("tcp: [3] 10.0.0.1:3260,1 iqn... (non-flash)"), which session mode selects with `-r N`. Optional $out lets tests and callers pass already-captured output.
+sub nimble_iscsi_session_ids_for_target {
+  my ( $target_iqn, $out ) = @_;
+  my $iqn_safe = nimble_untaint_iscsiadm_scalar($target_iqn);
+  return () unless length $iqn_safe;
+  $out //= nimble_iscsi_session_output();
+  my @sids;
+  for my $line ( split /\n/, $out // '' ) {
+    next unless $line =~ /^\s*\S+:\s+\[(\d+)\]\s+\S+\s+(\S+)/;
+    push @sids, $1 if lc($2) eq lc($iqn_safe);
+  }
+  return @sids;
+}
+
+# Rescan only the sessions of one volume's target. A bare `iscsiadm -m session --rescan` revalidates every
+# LUN path of every session on the host (all other Nimble volumes, each its own target, plus other
+# storages' LUNs); on ALUA arrays like Nimble that floods the kernel log and can freeze request queues
+# while disks revalidate. PVE 9.3 dropped the same full rescan from its iSCSI plugin for that reason.
+# New LUNs still appear through scsi_scan_new (host scan for new devices only).
+sub nimble_iscsi_rescan_target_sessions {
+  my ( $target_iqn, $timeout ) = @_;
+  my $adm = nimble_iscsiadm_path();
+  return 0 unless -x $adm;
+  my $n = 0;
+  for my $sid ( nimble_iscsi_session_ids_for_target($target_iqn) ) {
+    eval { run_command( [ $adm, '-m', 'session', '-r', $sid, '--rescan' ], timeout => $timeout // 60, quiet => 1 ); };
+    $n++ unless $@;
+  }
+  return $n;
+}
+
 # True if an active session exists for this IQN. Uses only `iscsiadm -m session` and matches the IQN in
 # output (compact + plain). Do not use `-m session -T <iqn>`: on common open-iscsi builds `-T`/`--targetname`
 # is for **node** mode, not session mode, and produces "option '-' is not allowed/supported" spam.
@@ -3902,10 +3934,9 @@ sub nimble_host_refresh_volume_size_after_array_resize {
   return unless $volume && length( $volume->{ serial } // '' );
   my $serial = $volume->{ serial };
 
-  eval {
-    my $adm = nimble_iscsiadm_path();
-    run_command( [ $adm, '-m', 'session', '--rescan' ], timeout => 120, quiet => 1 ) if -x $adm;
-  };
+  # Only this volume's sessions (see nimble_iscsi_rescan_target_sessions); the per-path device rescan
+  # below revalidates its size as well.
+  eval { nimble_iscsi_rescan_target_sessions( $volume->{ target_name }, 120 ); };
   eval { exec_command( [ get_command_path('multipath'), '-v2' ], -1, timeout => 60 ); };
   eval { scsi_scan_new('iscsi'); };
 
@@ -4457,11 +4488,9 @@ sub map_volume {
   elsif ( !length($target_iqn) ) {
     warn "Warning :: Volume \"$volname\" has no target_name (iSCSI IQN) from Nimble API.\n";
   }
-  # Like the GUI after attaching a LUN: rescan active iSCSI sessions so new LUNs appear without waiting only on sysfs scan.
-  eval {
-    my $adm = nimble_iscsiadm_path();
-    run_command( [ $adm, '-m', 'session', '--rescan' ], timeout => 120, quiet => 1 ) if -x $adm;
-  };
+  # Rescan this volume's own target sessions (not every session on the host) so its LUN appears
+  # without waiting only on the sysfs host scan.
+  eval { nimble_iscsi_rescan_target_sessions( $target_iqn, 120 ) if length($target_iqn); };
   eval { exec_command( [ get_command_path('multipath'), '-v2' ], -1, timeout => 60 ); };
   eval { scsi_scan_new( 'iscsi' ); };
   warn "Warning :: iSCSI host scan failed: $@" if $@;
@@ -4475,10 +4504,7 @@ sub map_volume {
       }
       # Sessions up but LUN/multipath slow: periodic rescan + multipath refresh (migration target).
       if ( $wait_ticks % 50 == 0 ) {
-        eval {
-          my $adm = nimble_iscsiadm_path();
-          run_command( [ $adm, '-m', 'session', '--rescan' ], timeout => 90, quiet => 1 ) if -x $adm;
-        };
+        eval { nimble_iscsi_rescan_target_sessions( $target_iqn, 90 ) if length($target_iqn); };
         eval { exec_command( [ get_command_path('multipath'), '-v2' ], -1, timeout => 60 ); };
       }
       my ( $p, $w ) = get_device_path_by_serial( $serial );
