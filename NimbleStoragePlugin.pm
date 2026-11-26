@@ -125,6 +125,16 @@ sub nimble_host_apiver {
   return ( defined($v) && $v =~ /^\d+$/ ) ? $v : 0;
 }
 
+# 'isolate-properties': our declared properties belong to this plugin alone, so they can never clash
+# with in-tree or other third-party plugins (no probing, legacy names always parse) and we declare
+# our own username/password/port. Gate on the feature, not on APIVER: APIVER 17 shipped in
+# libpve-storage-perl 9.1.17, isolation only in 9.1.18. On 9.1.17, declaring `username` would die
+# with "duplicate property" and take down every storage on the node.
+sub nimble_isolate_properties {
+  return 0 unless nimble_host_apiver() >= 17;
+  return PVE::Storage->can('assert_isolating_plugin_is_loadable') ? 1 : 0;
+}
+
 sub plugindata {
   my $supported = { images => 1, rootdir => 1, none => 1 };
   # APIVER 17: offer the per-type guest content types so a storage can be restricted to, e.g.,
@@ -159,6 +169,7 @@ sub plugindata {
     # on APIVER 11+ hosts only, leaving the password in cluster-replicated, GUI-visible storage.cfg.
     # Legacy cfg password lines from older plugin versions still work (see nimble_api_credentials).
     'sensitive-properties' => { password => 1 },
+    ( nimble_isolate_properties() ? ( 'isolate-properties' => 1 ) : () ),
   };
 }
 
@@ -287,6 +298,31 @@ sub properties {
     $props->{ $old } = \%schema;
   }
 
+  if ( nimble_isolate_properties() ) {
+    # Isolated (APIVER 17+): declare everything we use that is not a common base property. Every
+    # declared property is an option; options() decides required/fixed for the ones it lists, the
+    # rest must say optional here (legacy aliases are migrated away by check_config).
+    $props->{ username } = {
+      title       => 'Username',
+      description => 'Array management API user.',
+      type        => 'string',
+    };
+    $props->{ password } = {
+      title       => 'Password',
+      description => 'Array management API password (kept in /etc/pve/priv/storage/<storage>.pw).',
+      type        => 'string',
+    };
+    $props->{ port } = {
+      title       => 'API Port',
+      description => 'Array management REST API port (default 5392).',
+      type        => 'integer',
+      minimum     => 1,
+      maximum     => 65535,
+    };
+    $_->{ optional } = 1 for values %$props;
+    return $props;
+  }
+
   return $props if $properties_in_progress;
   local $properties_in_progress = 1;
 
@@ -337,7 +373,10 @@ sub options {
   # owns the schemas match; ours were copied from Pure originally). init() calls options() AFTER
   # merging every plugin's properties(), so the propertyList is complete here. Referencing a name
   # nobody declared would make init() die ("undefined property"), hence the existence check.
-  my $registered = eval { PVE::Storage::Plugin->private()->{ propertyList } } // {};
+  # Isolated (APIVER 17+): we declare the legacy names ourselves, so they always exist.
+  my $registered = nimble_isolate_properties()
+    ? { map { $_ => 1 } values %NIMBLE_LEGACY_CONFIG_KEYS }
+    : ( eval { PVE::Storage::Plugin->private()->{ propertyList } } // {} );
   for my $old ( values %NIMBLE_LEGACY_CONFIG_KEYS ) {
     $opts->{ $old } = { optional => 1 } if $registered->{ $old };
   }

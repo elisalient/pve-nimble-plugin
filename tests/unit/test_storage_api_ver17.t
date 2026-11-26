@@ -113,6 +113,35 @@ ok( $pd->{'hidden-properties'}{format}, 'plugindata: format hidden (raw only; di
 ok( $pd->{'advanced-properties'}{nimble_limit_iops}, 'plugindata: QoS limit is advanced' );
 ok( !$pd->{'advanced-properties'}{nimble_address}, 'plugindata: address is not advanced' );
 ok( $pd->{'sensitive-properties'}{password}, 'plugindata: password still sensitive' );
+# --- isolate-properties: needs pve-storage 9.1.18, one release after APIVER 17 -------------------
+ok( !exists $class->plugindata()->{'isolate-properties'}, 'plugindata: no isolation on APIVER 17 without host support (9.1.17)' );
+ok( !$class->properties()->{username}, 'properties: username not declared without host isolation support' );
+{
+  no warnings 'once';
+  *PVE::Storage::assert_isolating_plugin_is_loadable = sub { };
+}
+is( $class->plugindata()->{'isolate-properties'}, 1, 'plugindata: isolates properties when the host supports it' );
+{
+  my $iso = $class->properties();
+  ok( $iso->{$_}, "isolated properties: declares own $_" ) for qw(username password port);
+  ok( $iso->{address} && $iso->{vnprefix}, 'isolated properties: legacy aliases always declared' );
+  my @req = grep { !$iso->{$_}{optional} } keys %$iso;
+  is_deeply( \@req, [], 'isolated properties: all optional in schema (options() decides)' );
+  my @common = grep { $iso->{$_} } qw(nodes disable shared content content-dirs format
+    preallocation prune-backups max-protected-backups path create-base-path create-subdirs
+    bwlimit base snapshot-as-volume-chain mkdir delete digest);
+  is_deeply( \@common, [], 'isolated properties: no common base property or API parameter declared' );
+  my $o = $class->options();
+  is( $o->{nimble_address}{fixed}, 1, 'isolated options: address fixed (required)' );
+  is( $o->{username}{fixed}, 1, 'isolated options: username fixed (required)' );
+  ok( $o->{password}{optional}, 'isolated options: sensitive password optional' );
+  ok( $o->{address}{optional}, 'isolated options: legacy alias listed as optional' );
+}
+set_pve_storage_api( 16, 7 );
+ok( !exists $class->plugindata()->{'isolate-properties'}, 'plugindata: no isolation before APIVER 17' );
+ok( !$class->properties()->{username}, 'properties: username not declared when not isolated' );
+set_pve_storage_api( 17, 8 );
+
 my $props = $class->properties();
 is( $props->{nimble_address}{title}, 'Array Address', 'properties: title set for web UI' );
 my @untitled = grep { /^nimble_/ && !$props->{$_}{title} } keys %$props;
