@@ -222,6 +222,15 @@ devices {
 
 After editing, run `multipathd reconfigure`.
 
+### Proxmox VE 9.3+: cluster-wide Multipath Overrides
+
+On Proxmox VE 9.3 the blocks above can live in **Datacenter → SAN → Multipath Overrides** (`/etc/pve/multipath-overrides.conf`) instead of each node's `/etc/multipath.conf`. Every 9.3 node writes them to `/etc/multipath/conf.d/pve-overrides.conf` and reloads `multipathd`.
+
+- Upgrade all nodes to 9.3 first. Older nodes ignore the overrides.
+- `defaults` and `blacklist` apply to every disk and array on every node, so only move them if they suit all nodes.
+- Files in `conf.d` are read after `/etc/multipath.conf`. If a node has tuned `device` values there, put the tuned values into the overrides.
+- To move a node: check that `pve-overrides.conf` exists, remove the blocks from `/etc/multipath.conf`, run `multipathd reconfigure`, then check `multipath -t` and `multipath -ll`.
+
 **Proxmox VE 9.3+:** do not add Nimble volumes under **Datacenter → SAN → Add Multipath Entry**. The plugin manages per-volume aliases itself. For a WWID that has an entry there, the plugin leaves the alias to PVE, and PVE never removes a WWID from its allow-list when the volume is deleted.
 
 > **Alias management:** The plugin automatically writes per-volume WWID→alias entries to `/etc/multipath/conf.d/nimble-<storeid>.conf` when volumes are mapped, and restores them on `activate_storage`. You do not need to manage this file manually — but do not hand-edit it, as the plugin owns it.
