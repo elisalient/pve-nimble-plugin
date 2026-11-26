@@ -77,6 +77,35 @@ is(
   'api() reports tested 17 when host APIVER is newer but within APIAGE window',
 );
 
+# --- APIVER 17: guest volume types -------------------------------------------------------------
+# Older hosts: the base class has no guest_volume_vtype() -> 'images'.
+set_pve_storage_api( 15, 6 );
+is( ( $class->parse_volname('vm-100-disk-0') )[0], 'images', 'parse_volname: images without base helper' );
+my $pd15 = $class->plugindata();
+ok( !$pd15->{content}[0]{'vm-vol'}, 'plugindata: no vm-vol content type before APIVER 17' );
+
+# 9.3 hosts: mirror the base helper (it reports 'images' when the plugin's api() < 17).
+{
+  no warnings 'once';
+  *PVE::Storage::Plugin::guest_volume_vtype = sub {
+    my ( $c, $format, $name ) = @_;
+    return 'images' if $c->can('api') && $c->api() < 17;
+    return 'ct-vol' if $format eq 'subvol';
+    return 'vm-state' if defined($name) && $name =~ m/^vm-\d+-state-/;
+    return 'vm-vol';
+  };
+}
+is( ( $class->parse_volname('vm-100-disk-0') )[0], 'images', 'parse_volname: images when host APIVER 15 even with helper' );
+set_pve_storage_api( 17, 8 );
+is( ( $class->parse_volname('vm-100-disk-0') )[0], 'vm-vol', 'parse_volname: vm-vol on APIVER 17' );
+is( ( $class->parse_volname('vm-100-state-snap1') )[0], 'vm-state', 'parse_volname: vm-state on APIVER 17' );
+my @pv = $class->parse_volname('base-101-disk-0');
+is( $pv[5], 1, 'parse_volname: base flag kept' );
+is( $pv[1], 'base-101-disk-0', 'parse_volname: name kept' );
+
+my $pd = $class->plugindata();
+ok( $pd->{content}[0]{$_}, "plugindata: $_ content type on APIVER 17" ) for qw(vm-vol vm-state ct-vol);
+is_deeply( $pd->{content}[1], { images => 1, rootdir => 1 }, 'plugindata: default content unchanged' );
 # --- targeted iSCSI rescans (no host-wide `iscsiadm -m session --rescan`) -------------------------
 {
   my $P = 'PVE::Storage::Custom::NimbleStoragePlugin';

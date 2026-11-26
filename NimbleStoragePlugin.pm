@@ -100,7 +100,7 @@ sub api {
   # APIVER 16: optional format/name helpers for directory-like alloc/rename; unused here
   #   (alloc_image/rename_volume are implemented directly).
   # APIVER 17: guest volume types vm-vol/vm-state/ct-vol (images/rootdir still accepted),
-  #   plugin UI metadata, optional isolate-properties — additive; parse_volname still returns images.
+  #   plugin UI metadata, optional isolate-properties — additive; parse_volname uses guest_volume_vtype().
   # Report the host version up to 17 so PVE does not warn about an older storage API.
   my $tested_apiver = 17;
   my $apiver        = eval { PVE::Storage::APIVER() };
@@ -120,9 +120,21 @@ sub type {
   return "nimble";
 }
 
+sub nimble_host_apiver {
+  my $v = eval { PVE::Storage::APIVER() };
+  return ( defined($v) && $v =~ /^\d+$/ ) ? $v : 0;
+}
+
 sub plugindata {
+  my $supported = { images => 1, rootdir => 1, none => 1 };
+  # APIVER 17: offer the per-type guest content types so a storage can be restricted to, e.g.,
+  # VM disks only (keeping RAM-snapshot state volumes off the array). Older hosts do not know
+  # these types, so only advertise them there. 'images'/'rootdir' keep allowing all of them.
+  if ( nimble_host_apiver() >= 17 ) {
+    $supported->{ $_ } = 1 for qw(vm-vol vm-state ct-vol);
+  }
   return {
-    content => [ { images => 1, rootdir => 1, none => 1 }, { images => 1, rootdir => 1 } ],
+    content => [ $supported, { images => 1, rootdir => 1 } ],
     format  => [ { raw    => 1 },            "raw" ],
     # `password` is sensitive (APIVER 11 mechanism): PVE keeps it out of storage.cfg and passes it
     # to on_add/on_update hooks separately; our hooks persist it to /etc/pve/priv/storage/<id>.pw.
@@ -3985,10 +3997,16 @@ sub nimble_host_refresh_volume_size_after_array_resize {
 sub parse_volname {
   my ( $class, $volname ) = @_;
   if ( $volname =~ m/^((vm|base)-(\d+)-\S+)$/ ) {
-    # Core block plugins (RBD/LVM/ZFS) return ('images', <full volname>, vmid, ..., $isBase, fmt).
-    # 'base' is not a valid vtype — base images are vtype 'images' with the isBase flag. base-*
+    # Core block plugins (RBD/LVM/ZFS) return (<guest vtype>, <full volname>, vmid, ..., $isBase, fmt).
+    # 'base' is not a valid vtype — base images are a guest vtype with the isBase flag. base-*
     # volumes cannot currently be created (create_base dies) but the contract must still hold.
-    return ( 'images', $1, $3, undef, undef, ( $2 eq 'base' ? 1 : 0 ), 'raw' );
+    # APIVER 17: the base helper returns 'vm-state' for vm-<id>-state-*, else 'vm-vol' (raw CT
+    # volumes share the VM naming scheme, same as in-tree LVM/RBD), and 'images' when api() < 17.
+    # Hosts before 9.3 lack the helper and keep getting 'images'.
+    my $vtype = PVE::Storage::Plugin->can('guest_volume_vtype')
+      ? $class->guest_volume_vtype( 'raw', $1 )
+      : 'images';
+    return ( $vtype, $1, $3, undef, undef, ( $2 eq 'base' ? 1 : 0 ), 'raw' );
   }
   die "Error :: Invalid volume name ($volname).\n";
 }
