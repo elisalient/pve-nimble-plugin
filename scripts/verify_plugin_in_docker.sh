@@ -88,6 +88,39 @@ perl -e '
   print "PVE::Storage register + init + createSchema: OK\n";
 '
 
+# API version test: PVE warns "is implementing an older storage API" whenever api() differs from
+# the host APIVER; that warning must not appear on any supported release.
+echo "API version test: no older-storage-API warning..."
+apiout=$(perl -e 'use PVE::Storage; print "host APIVER ", PVE::Storage::APIVER(), ", plugin api() ",
+  PVE::Storage::Custom::NimbleStoragePlugin->api(), "\n";' 2>&1)
+echo "$apiout"
+if echo "$apiout" | grep -q "older storage API"; then
+  echo "Error: PVE reports the plugin implements an older storage API" >&2
+  exit 1
+fi
+
+# Web UI metadata test (PVE 9.3+ / APIVER 17 only): the native dialog is generated from
+# GET /plugins/storage/plugin/{type}; check the schema it serves for our type.
+if perl -e 'use PVE::Storage; exit(PVE::Storage::APIVER() >= 17 ? 0 : 1)' 2>/dev/null; then
+  echo "Web UI metadata test: GET /plugins/storage/plugin/nimble..."
+  perl -e '
+    use strict; use warnings;
+    use PVE::Storage;
+    use PVE::API2::Plugins::Storage::Plugin;
+    my $m = PVE::API2::Plugins::Storage::Plugin->info({ type => "nimble" });
+    die "origin is not custom\n" unless $m->{origin} eq "custom";
+    die "display-name missing\n" unless ($m->{"display-name"} // "") =~ /Nimble/;
+    my $s = $m->{schema};
+    die "password not sensitive\n" unless $s->{password}{sensitive};
+    die "nimble_limit_iops not advanced\n" unless $s->{nimble_limit_iops}{"x-advanced"};
+    die "nimble_storeid not hidden\n" unless $s->{nimble_storeid}{"x-hidden"};
+    die "nimble_address title missing\n" unless ($s->{nimble_address}{title} // "") ne "";
+    die "nimble_address must be required\n" if $s->{nimble_address}{optional};
+    die "vm-state content missing\n" unless grep { $_ eq "vm-state" } @{ $m->{content}{supported} };
+    print "plugin metadata: OK (", scalar(keys %$s), " options)\n";
+  '
+fi
+
 # Parse test (nimble-only install): legacy pre-v0.0.25 keys must still parse and be canonicalized
 # to the nimble_-prefixed spellings by check_config; canonical keys must parse as-is.
 echo "Parse test: legacy + canonical storage.cfg keys (nimble-only)..."
@@ -179,9 +212,16 @@ my $pl = PVE::Storage::Plugin->private()->{propertyList};
 for my $p (qw(address vnprefix check_ssl token_ttl debug)) {
   die "shared property '$p' missing from propertyList\n" unless $pl->{$p};
 }
+# APIVER 17+: nimble isolates its properties, which then live in its own per-type schema rather
+# than the global propertyList; resolve them the way the plugin metadata API does.
+my $isolated = PVE::Storage::Custom::NimbleStoragePlugin->plugindata()->{'isolate-properties'} ? 1 : 0;
+print "nimble isolate-properties: $isolated\n";
 for my $p (qw(nimble_address nimble_vnprefix nimble_check_ssl nimble_token_ttl nimble_debug
               nimble_pool_name nimble_initiator_group nimble_volume_collection)) {
-  die "canonical property '$p' missing from propertyList\n" unless $pl->{$p};
+  my $found = $isolated
+    ? eval { PVE::Storage::Plugin->get_property_schema('nimble', $p) }
+    : $pl->{$p};
+  die "canonical property '$p' missing\n" unless $found;
 }
 # Legacy nimble section must still parse (shared names resolve via the rival plugin's property).
 my $raw = "nimble: legacy\n\taddress array1.example\n\tusername admin\n\tdebug 1\n\tcontent images\n";

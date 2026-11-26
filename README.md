@@ -71,7 +71,7 @@ No need to pre-create an initiator group — the plugin creates one automaticall
 
 ### Via the Web UI (recommended)
 
-Go to **Datacenter → Storage → Add → HPE Nimble** and fill in the dialog. Alletra 5000/6000 use that same menu entry (storage type `nimble`). The plugin ships a JavaScript panel (`NimbleEdit.js`) that registers "HPE Nimble" in the standard Add dropdown and enables the Edit button for existing entries.
+Go to **Datacenter → Storage → Add → HPE Nimble** and fill in the dialog. Alletra 5000/6000 use that same menu entry (storage type `nimble`). On Proxmox VE 9.3 and newer the dialog is generated natively from the plugin's metadata: the type is listed as "HPE Nimble / Alletra 5000/6000" under **Add → Custom Plugins**, with tuning options (QoS limits, discovery, debug) under *Advanced*. On older releases the plugin's JavaScript panel (`NimbleEdit.js`) registers "HPE Nimble" in the Add dropdown and enables the Edit button instead; on 9.3+ it detects the native dialog and steps aside.
 
 See **[docs/GUI_ADD_EDIT_STORAGE.md](docs/GUI_ADD_EDIT_STORAGE.md)** for a full walkthrough with field descriptions.
 
@@ -221,6 +221,19 @@ devices {
 ```
 
 After editing, run `multipathd reconfigure`.
+
+### Proxmox VE 9.3+: cluster-wide Multipath Overrides
+
+On Proxmox VE 9.3 the blocks above can live in **Datacenter → SAN → Multipath Overrides** (`/etc/pve/multipath-overrides.conf`) instead of each node's `/etc/multipath.conf`. Every 9.3 node writes them to `/etc/multipath/conf.d/pve-overrides.conf` and reloads `multipathd`.
+
+- Upgrade all nodes to 9.3 first. Older nodes ignore the overrides.
+- `defaults` and `blacklist` apply to every disk and array on every node, so only move them if they suit all nodes.
+- Files in `conf.d` are read after `/etc/multipath.conf`. If a node has tuned `device` values there, put the tuned values into the overrides.
+- To move a node: check that `pve-overrides.conf` exists, remove the blocks from `/etc/multipath.conf`, run `multipathd reconfigure`, then check `multipath -t` and `multipath -ll`.
+
+> **Warning (Proxmox VE 9.3): never use Node → SAN *Wipe* or *Create Volume Group* on a Nimble LUN.** The new SAN view decides whether a LUN is in use only from built-in storage settings (`vgname`, `target`, `base`, NVMe `subsysnqn`) and from processes on the *local* node. It cannot see that a LUN belongs to this plugin. A Nimble volume that is connected to a node but not open there is listed as **unused**, and wiping it destroys the guest disk. Examples are a volume activated for a backup or import, a VM that failed to start, or any volume on every node in a shared `nimble_initiator_group`. A plugin interface to claim LUNs has been proposed on pve-devel but does not exist yet; this plugin will implement it once it does.
+
+**Proxmox VE 9.3+:** do not add Nimble volumes under **Datacenter → SAN → Add Multipath Entry**. The plugin manages per-volume aliases itself. For a WWID that has an entry there, the plugin leaves the alias to PVE, and PVE never removes a WWID from its allow-list when the volume is deleted.
 
 > **Alias management:** The plugin automatically writes per-volume WWID→alias entries to `/etc/multipath/conf.d/nimble-<storeid>.conf` when volumes are mapped, and restores them on `activate_storage`. You do not need to manage this file manually — but do not hand-edit it, as the plugin owns it.
 
